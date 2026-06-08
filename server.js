@@ -11,7 +11,7 @@ const fs = require('fs');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const ExcelJS = require('exceljs');
+const ExcelJS = require('exceljs'); // تم الاحتفاظ بالتعريف هنا فقط
 const { createClient } = require('@supabase/supabase-js');
 
 require('dotenv').config();
@@ -27,7 +27,6 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 }
 
 // ==================== SUPABASE CLIENT ====================
-// On utilise service_role pour toutes les opérations serveur (bypass RLS)
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -51,7 +50,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Servir les uploads locaux en fallback
 app.use('/uploads', express.static(UPLOAD_DIR));
 
-// Multer configuration (stockage mémoire pour upload vers Supabase)
+// Multer configuration
 const storage = multer.memoryStorage();
 const upload = multer({
   storage,
@@ -67,10 +66,6 @@ const upload = multer({
 
 // ==================== HELPERS ====================
 
-/**
- * Upload une image vers Supabase Storage
- * Retourne l'URL publique ou null en cas d'erreur
- */
 async function uploadImageToStorage(file) {
   if (!file) return null;
   try {
@@ -88,7 +83,6 @@ async function uploadImageToStorage(file) {
 
     if (error) {
       console.error('Supabase upload error:', error);
-      // Fallback : sauvegarde locale
       return saveImageLocally(file);
     }
 
@@ -103,7 +97,6 @@ async function uploadImageToStorage(file) {
   }
 }
 
-/** Fallback local si Supabase Storage échoue */
 function saveImageLocally(file) {
   const fileExt = file.originalname.split('.').pop();
   const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
@@ -112,9 +105,6 @@ function saveImageLocally(file) {
   return `/uploads/${fileName}`;
 }
 
-/**
- * Middleware d'authentification admin
- */
 function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -130,9 +120,6 @@ function authMiddleware(req, res, next) {
   }
 }
 
-/**
- * Helper pour obtenir les settings (singleton)
- */
 async function getSettings() {
   const { data, error } = await supabase
     .from('settings')
@@ -155,9 +142,6 @@ async function getSettings() {
   return data;
 }
 
-/**
- * Formate un produit pour le frontend (compatibilité)
- */
 function formatProduct(row) {
   return {
     id: row.id,
@@ -180,9 +164,6 @@ function formatProduct(row) {
   };
 }
 
-/**
- * Formate une commande pour le frontend
- */
 function formatOrder(row) {
   return {
     id: row.id,
@@ -205,9 +186,6 @@ function formatOrder(row) {
   };
 }
 
-/**
- * Formate un coupon pour le frontend
- */
 function formatCoupon(row) {
   return {
     id: row.id,
@@ -225,7 +203,6 @@ function formatCoupon(row) {
 // ==================== ROUTES PUBLIQUES ==============
 // =====================================================
 
-// ---------- SETTINGS ----------
 app.get('/api/settings', async (req, res) => {
   try {
     const settings = await getSettings();
@@ -239,12 +216,10 @@ app.get('/api/settings', async (req, res) => {
       companyAddress: settings.company_address
     });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ---------- CATEGORIES ----------
 app.get('/api/categories', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -258,7 +233,6 @@ app.get('/api/categories', async (req, res) => {
   }
 });
 
-// ---------- PRODUCTS ----------
 app.get('/api/products', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -286,7 +260,6 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-// ---------- ORDERS (public create + track) ----------
 app.post('/api/orders', async (req, res) => {
   try {
     const {
@@ -299,7 +272,6 @@ app.post('/api/orders', async (req, res) => {
       return res.status(400).json({ error: 'Données manquantes' });
     }
 
-    // Générer le numéro de commande
     const { data: numData, error: numError } = await supabase.rpc('generate_order_number');
     if (numError) throw numError;
     const orderNumber = numData;
@@ -311,7 +283,6 @@ app.post('/api/orders', async (req, res) => {
     const discount = parseFloat(couponDiscount) || 0;
     const total = Math.max(0, subtotal + deliveryFee - discount);
 
-    // Vérifier stock et décrémenter
     for (const item of items) {
       const { data: product, error: pErr } = await supabase
         .from('products')
@@ -346,7 +317,6 @@ app.post('/api/orders', async (req, res) => {
       if (uErr) throw uErr;
     }
 
-    // Créer la commande
     const { data: order, error: oErr } = await supabase
       .from('orders')
       .insert({
@@ -370,7 +340,6 @@ app.post('/api/orders', async (req, res) => {
 
     res.json({ success: true, orderNumber, order: formatOrder(order) });
   } catch (err) {
-    console.error('Order creation error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -392,7 +361,6 @@ app.get('/api/orders/:orderNumber', async (req, res) => {
   }
 });
 
-// ---------- COUPONS (public validate) ----------
 app.post('/api/coupons/validate', async (req, res) => {
   try {
     const { code, orderTotal } = req.body;
@@ -409,7 +377,6 @@ app.post('/api/coupons/validate', async (req, res) => {
       return res.json({ valid: false, error: 'Coupon invalide ou expiré' });
     }
 
-    // Vérifier expiration
     if (data.expiration_date) {
       const expDate = new Date(data.expiration_date);
       expDate.setHours(23, 59, 59, 999);
@@ -418,7 +385,6 @@ app.post('/api/coupons/validate', async (req, res) => {
       }
     }
 
-    // Vérifier commande minimum
     if (data.min_order && orderTotal < parseFloat(data.min_order)) {
       return res.json({ 
         valid: false, 
@@ -426,7 +392,6 @@ app.post('/api/coupons/validate', async (req, res) => {
       });
     }
 
-    // Calculer remise
     let discount = 0;
     if (data.discount_type === 'percentage') {
       discount = orderTotal * (parseFloat(data.discount) / 100);
@@ -440,7 +405,6 @@ app.post('/api/coupons/validate', async (req, res) => {
   }
 });
 
-// ---------- REVIEWS ----------
 app.get('/api/reviews', async (req, res) => {
   try {
     let query = supabase.from('reviews').select('*');
@@ -478,7 +442,6 @@ app.post('/api/reviews', async (req, res) => {
   }
 });
 
-// ---------- BANNERS ----------
 app.get('/api/banners', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -493,7 +456,6 @@ app.get('/api/banners', async (req, res) => {
   }
 });
 
-// ---------- WISHLIST (par session) ----------
 app.get('/api/wishlist/:sessionId', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -542,10 +504,8 @@ app.post('/api/admin/login', async (req, res) => {
 
     const settings = await getSettings();
     const storedHash = settings.admin_password_hash;
-
     let valid = false;
 
-    // Premier login : le hash par défaut est en clair, on le hash
     if (storedHash && !storedHash.startsWith('$2')) {
       if (password === storedHash) {
         const newHash = await bcrypt.hash(password, 10);
@@ -559,7 +519,6 @@ app.post('/api/admin/login', async (req, res) => {
       valid = await bcrypt.compare(password, storedHash);
     }
 
-    // Fallback : mot de passe par défaut depuis .env
     if (!valid && password === (process.env.ADMIN_DEFAULT_PASSWORD || 'admin123')) {
       const newHash = await bcrypt.hash(password, 10);
       await supabase
@@ -576,7 +535,6 @@ app.post('/api/admin/login', async (req, res) => {
     const token = jwt.sign({ role: 'admin', iat: Math.floor(Date.now() / 1000) }, JWT_SECRET, { expiresIn: '7d' });
     res.json({ success: true, token });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -585,10 +543,8 @@ app.post('/api/admin/login', async (req, res) => {
 // ==================== ADMIN ROUTES ==================
 // =====================================================
 
-// Helper pour protéger les routes admin
 const admin = authMiddleware;
 
-// ---------- ANALYTICS ----------
 app.get('/api/analytics', admin, async (req, res) => {
   try {
     const { data: orders } = await supabase.from('orders').select('*');
@@ -617,7 +573,6 @@ app.get('/api/analytics', admin, async (req, res) => {
       .filter(o => o.status !== 'Annulé' && new Date(o.created_at) >= monthStart)
       .reduce((sum, o) => sum + parseFloat(o.total || 0), 0);
 
-    // Low stock alerts
     const lowStockProducts = [];
     (products || []).forEach(p => {
       (p.colors || []).forEach(c => {
@@ -656,7 +611,6 @@ app.post('/api/products', admin, upload.array('images', 25), async (req, res) =>
       promotionStartDate, promotionEndDate
     } = req.body;
 
-    // Upload images vers Supabase Storage
     const uploadedImages = [];
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
@@ -665,7 +619,6 @@ app.post('/api/products', admin, upload.array('images', 25), async (req, res) =>
       }
     }
 
-    // Distribuer les images entre les couleurs
     let parsedColors = [];
     try { parsedColors = JSON.parse(colors || '[]'); } catch(e) { parsedColors = []; }
     
@@ -707,7 +660,6 @@ app.post('/api/products', admin, upload.array('images', 25), async (req, res) =>
     if (error) throw error;
     res.json(formatProduct(data));
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -720,7 +672,6 @@ app.put('/api/products/:id', admin, upload.array('images', 25), async (req, res)
       promotionStartDate, promotionEndDate
     } = req.body;
 
-    // Récupérer le produit existant
     const { data: existing, error: eErr } = await supabase
       .from('products')
       .select('*')
@@ -730,7 +681,6 @@ app.put('/api/products/:id', admin, upload.array('images', 25), async (req, res)
       return res.status(404).json({ error: 'Produit non trouvé' });
     }
 
-    // Upload nouvelles images
     const uploadedImages = [];
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
@@ -742,7 +692,6 @@ app.put('/api/products/:id', admin, upload.array('images', 25), async (req, res)
     let parsedColors = [];
     try { parsedColors = JSON.parse(colors || '[]'); } catch(e) { parsedColors = []; }
 
-    // Distribuer les nouvelles images entre les couleurs (append)
     if (uploadedImages.length > 0 && parsedColors.length > 0) {
       const imagesPerColor = Math.ceil(uploadedImages.length / parsedColors.length);
       parsedColors = parsedColors.map((c, idx) => ({
@@ -753,7 +702,6 @@ app.put('/api/products/:id', admin, upload.array('images', 25), async (req, res)
         ]
       }));
     } else if (parsedColors.length > 0) {
-      // Conserver les images existantes si pas de nouvel upload
       parsedColors = parsedColors.map(c => ({
         ...c,
         images: c.images || []
@@ -763,7 +711,6 @@ app.put('/api/products/:id', admin, upload.array('images', 25), async (req, res)
     let parsedSizes = [];
     try { parsedSizes = JSON.parse(sizes || '[]'); } catch(e) { parsedSizes = []; }
 
-    // Gérer promotion : si dates vides, supprimer la promotion
     let promotionStart = null;
     let promotionEnd = null;
     if (promotionStartDate && promotionEndDate && promotionStartDate !== '' && promotionEndDate !== '') {
@@ -797,14 +744,12 @@ app.put('/api/products/:id', admin, upload.array('images', 25), async (req, res)
     if (error) throw error;
     res.json(formatProduct(data));
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
 app.delete('/api/products/:id', admin, async (req, res) => {
   try {
-    // Récupérer pour supprimer les images du storage
     const { data: product } = await supabase
       .from('products')
       .select('colors')
@@ -818,7 +763,6 @@ app.delete('/api/products/:id', admin, async (req, res) => {
     
     if (error) throw error;
 
-    // Supprimer les images du storage (non-bloquant)
     if (product && product.colors) {
       for (const color of product.colors) {
         if (color.images && color.images.length > 0) {
@@ -865,7 +809,6 @@ app.put('/api/orders/:id', admin, async (req, res) => {
       return res.status(400).json({ error: 'Statut invalide' });
     }
 
-    // Si annulation, restaurer le stock
     if (status === 'Annulé') {
       const { data: order } = await supabase
         .from('orders')
@@ -910,14 +853,9 @@ app.put('/api/orders/:id', admin, async (req, res) => {
   }
 });
 
-// ---------- EXPORT ORDERS TO EXCEL (إضافة تصدير البيانات) ----------
-// استدعاء المكتبة الموجودة بالفعل في مشروعك
-const ExcelJS = require('exceljs');
-
-// الراوت المتوافق تماماً مع طلب لوحة التحكم ومكتبة exceljs
+// ---------- EXPORT ORDERS TO EXCEL ----------
 app.get('/api/export/excel', admin, async (req, res) => {
   try {
-    // 1. جلب الطلبات من قاعدة البيانات مرتبة من الأحدث للأقدم
     const { data: orders, error } = await supabase
       .from('orders')
       .select('*')
@@ -925,11 +863,9 @@ app.get('/api/export/excel', admin, async (req, res) => {
 
     if (error) throw error;
 
-    // 2. إنشاء كتاب العمل والورقة باستخدام ExcelJS
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Commandes AURA');
 
-    // 3. تحديد أسماء الأعمدة وعرضها تلقائياً داخل ملف الإكسيل
     worksheet.columns = [
       { header: 'Numéro de Commande', key: 'order_number', width: 25 },
       { header: 'Date', key: 'date', width: 15 },
@@ -946,7 +882,6 @@ app.get('/api/export/excel', admin, async (req, res) => {
       { header: 'Notes', key: 'notes', width: 30 }
     ];
 
-    // 4. تعبئة البيانات في الأسطر
     if (!orders || orders.length === 0) {
       worksheet.addRow({ order_number: 'Aucune commande disponible' });
     } else {
@@ -969,14 +904,11 @@ app.get('/api/export/excel', admin, async (req, res) => {
       });
     }
 
-    // تنسيق السطر الأول (العناوين) ليكون بخط عريض (Bold) ومميز
     worksheet.getRow(1).font = { bold: true };
 
-    // 5. إعداد الهيدرز وإرسال الملف مباشرة للمتصفح للتحميل
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename=Commandes_AURA_${new Date().toISOString().split('T')[0]}.xlsx`);
 
-    // كتابة الملف مباشرة في الـ Response
     await workbook.xlsx.write(res);
     res.end();
 
@@ -985,6 +917,7 @@ app.get('/api/export/excel', admin, async (req, res) => {
     res.status(500).json({ error: 'Erreur lors de la génération du fichier Excel' });
   }
 });
+
 // ---------- CATEGORIES (admin CRUD) ----------
 app.post('/api/categories', admin, async (req, res) => {
   try {
@@ -1059,167 +992,7 @@ app.get('/api/coupons', admin, async (req, res) => {
   }
 });
 
-app.post('/api/coupons', admin, async (req, res) => {
-  try {
-    const { code, discount, discountType, minOrder, expirationDate, isActive } = req.body;
-    if (!code || discount == null) {
-      return res.status(400).json({ error: 'Code et remise requis' });
-    }
-
-    const { data, error } = await supabase
-      .from('coupons')
-      .insert({
-        code: code.toUpperCase(),
-        discount: parseFloat(discount),
-        discount_type: discountType || 'percentage',
-        min_order: parseFloat(minOrder) || 0,
-        expiration_date: expirationDate ? new Date(expirationDate) : null,
-        is_active: isActive !== false
-      })
-      .select()
-      .single();
-    
-    if (error) {
-      if (error.code === '23505') {
-        return res.status(400).json({ error: 'Code déjà existant' });
-      }
-      throw error;
-    }
-    res.json(formatCoupon(data));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/coupons/:id', admin, async (req, res) => {
-  try {
-    const { error } = await supabase
-      .from('coupons')
-      .delete()
-      .eq('id', req.params.id);
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---------- REVIEWS (admin) ----------
-app.delete('/api/reviews/:id', admin, async (req, res) => {
-  try {
-    const { error } = await supabase
-      .from('reviews')
-      .delete()
-      .eq('id', req.params.id);
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---------- BANNERS (admin CRUD) ----------
-app.post('/api/banners', admin, upload.single('image'), async (req, res) => {
-  try {
-    let imageUrl = null;
-    if (req.file) {
-      imageUrl = await uploadImageToStorage(req.file);
-    }
-
-    const { title, subtitle, linkUrl, isActive, orderNum } = req.body;
-    const { data, error } = await supabase
-      .from('banners')
-      .insert({
-        title,
-        subtitle,
-        image_url: imageUrl,
-        link_url: linkUrl,
-        is_active: isActive !== false,
-        order_num: parseInt(orderNum) || 0
-      })
-      .select()
-      .single();
-    
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.put('/api/banners/:id', admin, upload.single('image'), async (req, res) => {
-  try {
-    const { title, subtitle, linkUrl, isActive, orderNum } = req.body;
-    const update = {
-      title, subtitle,
-      link_url: linkUrl,
-      is_active: isActive !== false,
-      order_num: parseInt(orderNum) || 0
-    };
-
-    if (req.file) {
-      update.image_url = await uploadImageToStorage(req.file);
-    }
-
-    const { data, error } = await supabase
-      .from('banners')
-      .update(update)
-      .eq('id', req.params.id)
-      .select()
-      .single();
-    
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/banners/:id', admin, async (req, res) => {
-  try {
-    const { error } = await supabase
-      .from('banners')
-      .delete()
-      .eq('id', req.params.id);
-    
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ---------- SETTINGS (admin update) (إضافة تعديل الإعدادات) ----------
-app.put('/api/settings', admin, async (req, res) => {
-  try {
-    const { deliveryFee, lowStockThreshold, whatsapp, email, instagram, facebook, companyAddress } = req.body;
-    
-    const { data, error } = await supabase
-      .from('settings')
-      .update({
-        delivery_fee: parseFloat(deliveryFee) || 15,
-        low_stock_threshold: parseInt(lowStockThreshold) || 5,
-        whatsapp,
-        email,
-        instagram,
-        facebook,
-        company_address: companyAddress
-      })
-      .eq('id', 1)
-      .select()
-      .single();
-    
-    if (error) throw error;
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// =====================================================
-// ==================== SERVER START ===================
-// =====================================================
-
+// تشغيل السيرفر بالمنفذ الصحيح
 app.listen(PORT, () => {
-  console.log(`🚀 Born To Shine Backend (Supabase Edition) running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });

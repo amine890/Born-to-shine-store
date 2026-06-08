@@ -911,12 +911,13 @@ app.put('/api/orders/:id', admin, async (req, res) => {
 });
 
 // ---------- EXPORT ORDERS TO EXCEL (إضافة تصدير البيانات) ----------
-const XLSX = require('xlsx');
+// استدعاء المكتبة الموجودة بالفعل في مشروعك
+const ExcelJS = require('exceljs');
 
-// تعديل المسار ليتطابق مع طلب لوحة التحكم تماماً
+// الراوت المتوافق تماماً مع طلب لوحة التحكم ومكتبة exceljs
 app.get('/api/export/excel', admin, async (req, res) => {
   try {
-    // جلب الطلبات من الجدول الجديد
+    // 1. جلب الطلبات من قاعدة البيانات مرتبة من الأحدث للأقدم
     const { data: orders, error } = await supabase
       .from('orders')
       .select('*')
@@ -924,58 +925,64 @@ app.get('/api/export/excel', admin, async (req, res) => {
 
     if (error) throw error;
 
-    // إذا كان الجدول فارغاً، نرسل ملفاً يحتوي على ترويسة الأعمدة فقط لتجنب انهيار الموقع
+    // 2. إنشاء كتاب العمل والورقة باستخدام ExcelJS
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Commandes AURA');
+
+    // 3. تحديد أسماء الأعمدة وعرضها تلقائياً داخل ملف الإكسيل
+    worksheet.columns = [
+      { header: 'Numéro de Commande', key: 'order_number', width: 25 },
+      { header: 'Date', key: 'date', width: 15 },
+      { header: 'Nom Client', key: 'customer_name', width: 20 },
+      { header: 'Téléphone', key: 'customer_phone', width: 15 },
+      { header: 'Email', key: 'customer_email', width: 25 },
+      { header: 'Gouvernorat', key: 'city', width: 15 },
+      { header: 'Adresse', key: 'address', width: 30 },
+      { header: 'Sous-total (TND)', key: 'subtotal', width: 18 },
+      { header: 'Livraison (TND)', key: 'delivery_fee', width: 18 },
+      { header: 'Remise (TND)', key: 'coupon_discount', width: 15 },
+      { header: 'Total Global (TND)', key: 'total', width: 18 },
+      { header: 'Statut', key: 'status', width: 15 },
+      { header: 'Notes', key: 'notes', width: 30 }
+    ];
+
+    // 4. تعبئة البيانات في الأسطر
     if (!orders || orders.length === 0) {
-      const emptyWorksheet = XLSX.utils.json_to_sheet([{
-        'Numéro de Commande': 'Aucune commande disponible',
-        'Date': '',
-        'Nom Client': '',
-        'Téléphone': '',
-        'Total (TND)': '',
-        'Statut': ''
-      }]);
-      const emptyWorkbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(emptyWorkbook, emptyWorksheet, 'Commandes');
-      const buffer = XLSX.write(emptyWorkbook, { type: 'buffer', bookType: 'xlsx' });
-      
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', 'attachment; filename=Commandes_Vides.xlsx');
-      return res.send(buffer);
+      worksheet.addRow({ order_number: 'Aucune commande disponible' });
+    } else {
+      orders.forEach(order => {
+        worksheet.addRow({
+          order_number: order.order_number,
+          date: order.created_at ? new Date(order.created_at).toLocaleDateString('fr-FR') : '',
+          customer_name: order.customer_name,
+          customer_phone: order.customer_phone,
+          customer_email: order.customer_email || '',
+          city: order.city || '',
+          address: order.address || '',
+          subtotal: order.subtotal || 0,
+          delivery_fee: order.delivery_fee || 0,
+          coupon_discount: order.coupon_discount || 0,
+          total: order.total || 0,
+          status: order.status || 'Nouveau',
+          notes: order.notes || ''
+        });
+      });
     }
 
-    // ترتيب البيانات داخل ملف الـ Excel وفقاً للحقول الجديدة
-    const excelRows = orders.map(order => {
-      return {
-        'Numéro de Commande': order.order_number, // كود التوليد التلقائي الجديد
-        'Date': order.created_at ? new Date(order.created_at).toLocaleDateString('fr-FR') : '',
-        'Nom Client': order.customer_name,
-        'Téléphone': order.customer_phone,
-        'Email': order.customer_email || '',
-        'Gouvernorat': order.city || '',
-        'Adresse': order.address || '',
-        'Sous-total (TND)': order.subtotal || 0,
-        'Livraison (TND)': order.delivery_fee || 0,
-        'Remise (TND)': order.coupon_discount || 0,
-        'Total Global (TND)': order.total || 0,
-        'Statut': order.status || 'Nouveau',
-        'Notes': order.notes || ''
-      };
-    });
+    // تنسيق السطر الأول (العناوين) ليكون بخط عريض (Bold) ومميز
+    worksheet.getRow(1).font = { bold: true };
 
-    const worksheet = XLSX.utils.json_to_sheet(excelRows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Commandes AURA');
-
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-
+    // 5. إعداد الهيدرز وإرسال الملف مباشرة للمتصفح للتحميل
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename=Commandes_AURA_${new Date().toISOString().split('T')[0]}.xlsx`);
-    
-    res.send(buffer);
+
+    // كتابة الملف مباشرة في الـ Response
+    await workbook.xlsx.write(res);
+    res.end();
 
   } catch (err) {
-    console.error('Erreur Excel:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('Erreur ExcelJS:', err.message);
+    res.status(500).json({ error: 'Erreur lors de la génération du fichier Excel' });
   }
 });
 // ---------- CATEGORIES (admin CRUD) ----------

@@ -910,6 +910,68 @@ app.put('/api/orders/:id', admin, async (req, res) => {
   }
 });
 
+// ---------- EXPORT ORDERS TO EXCEL (إضافة تصدير البيانات) ----------
+app.get('/api/admin/orders/export', admin, async (req, res) => {
+  try {
+    const { data: orders, error } = await supabase
+      .from('orders')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Commandes');
+
+    worksheet.columns = [
+      { header: 'Numéro de Commande', key: 'order_number', width: 20 },
+      { header: 'Client', key: 'customer_name', width: 25 },
+      { header: 'Téléphone', key: 'customer_phone', width: 15 },
+      { header: 'Email', key: 'customer_email', width: 25 },
+      { header: 'Ville', key: 'city', width: 15 },
+      { header: 'Adresse', key: 'address', width: 30 },
+      { header: 'Sous-total (DT)', key: 'subtotal', width: 15 },
+      { header: 'Livraison (DT)', key: 'delivery_fee', width: 15 },
+      { header: 'Remise Coupon (DT)', key: 'coupon_discount', width: 15 },
+      { header: 'Total (DT)', key: 'total', width: 15 },
+      { header: 'Statut', key: 'status', width: 15 },
+      { header: 'Date de Création', key: 'created_at', width: 25 }
+    ];
+
+    (orders || []).forEach(order => {
+      worksheet.addRow({
+        order_number: order.order_number,
+        customer_name: order.customer_name,
+        customer_phone: order.customer_phone,
+        customer_email: order.customer_email || 'N/A',
+        city: order.city || 'N/A',
+        address: order.address || 'N/A',
+        subtotal: parseFloat(order.subtotal) || 0,
+        delivery_fee: parseFloat(order.delivery_fee) || 0,
+        coupon_discount: parseFloat(order.coupon_discount) || 0,
+        total: parseFloat(order.total) || 0,
+        status: order.status,
+        created_at: new Date(order.created_at).toLocaleString()
+      });
+    });
+
+    // تنسيق الخلايا العلوية (Header Style)
+    worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
+    worksheet.getRow(1).eachCell(cell => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1F4E78' } };
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=commandes_' + Date.now() + '.xlsx');
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------- CATEGORIES (admin CRUD) ----------
 app.post('/api/categories', admin, async (req, res) => {
   try {
@@ -1092,6 +1154,7 @@ app.put('/api/banners/:id', admin, upload.single('image'), async (req, res) => {
       .eq('id', req.params.id)
       .select()
       .single();
+    
     if (error) throw error;
     res.json(data);
   } catch (err) {
@@ -1105,6 +1168,7 @@ app.delete('/api/banners/:id', admin, async (req, res) => {
       .from('banners')
       .delete()
       .eq('id', req.params.id);
+    
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
@@ -1112,180 +1176,37 @@ app.delete('/api/banners/:id', admin, async (req, res) => {
   }
 });
 
-// ---------- SETTINGS (admin) ----------
+// ---------- SETTINGS (admin update) (إضافة تعديل الإعدادات) ----------
 app.put('/api/settings', admin, async (req, res) => {
   try {
-    const {
-      deliveryFee, lowStockThreshold,
-      whatsapp, email, instagram, facebook, companyAddress,
-      adminPassword
-    } = req.body;
-
-    const update = {
-      delivery_fee: parseFloat(deliveryFee) || 15,
-      low_stock_threshold: parseInt(lowStockThreshold) || 5,
-      whatsapp: whatsapp || null,
-      email: email || null,
-      instagram: instagram || null,
-      facebook: facebook || null,
-      company_address: companyAddress || null,
-      updated_at: new Date().toISOString()
-    };
-
-    if (adminPassword && adminPassword.length >= 4) {
-      update.admin_password_hash = await bcrypt.hash(adminPassword, 10);
-    }
-
+    const { deliveryFee, lowStockThreshold, whatsapp, email, instagram, facebook, companyAddress } = req.body;
+    
     const { data, error } = await supabase
       .from('settings')
-      .update(update)
+      .update({
+        delivery_fee: parseFloat(deliveryFee) || 15,
+        low_stock_threshold: parseInt(lowStockThreshold) || 5,
+        whatsapp,
+        email,
+        instagram,
+        facebook,
+        company_address: companyAddress
+      })
       .eq('id', 1)
       .select()
       .single();
     
     if (error) throw error;
-    res.json({ success: true, settings: data });
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ---------- EXPORT EXCEL ----------
-app.get('/api/export/excel', admin, async (req, res) => {
-  try {
-    const type = req.query.type;
-    const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'Born To Shine';
-    workbook.created = new Date();
-
-    if (type === 'orders') {
-      const { data: orders } = await supabase
-        .from('orders')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      const sheet = workbook.addWorksheet('Commandes');
-      sheet.columns = [
-        { header: 'Numéro', key: 'order_number', width: 20 },
-        { header: 'Client', key: 'customer_name', width: 25 },
-        { header: 'Téléphone', key: 'customer_phone', width: 20 },
-        { header: 'Email', key: 'customer_email', width: 25 },
-        { header: 'Ville', key: 'city', width: 15 },
-        { header: 'Total', key: 'total', width: 12 },
-        { header: 'Statut', key: 'status', width: 15 },
-        { header: 'Date', key: 'created_at', width: 20 }
-      ];
-
-      (orders || []).forEach(o => {
-        sheet.addRow({
-          order_number: o.order_number,
-          customer_name: o.customer_name,
-          customer_phone: o.customer_phone,
-          customer_email: o.customer_email,
-          city: o.city,
-          total: parseFloat(o.total),
-          status: o.status,
-          created_at: new Date(o.created_at).toLocaleDateString('fr-FR')
-        });
-      });
-    } else if (type === 'products') {
-      const { data: products } = await supabase
-        .from('products')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      const sheet = workbook.addWorksheet('Produits');
-      sheet.columns = [
-        { header: 'ID', key: 'id', width: 36 },
-        { header: 'Nom', key: 'name', width: 30 },
-        { header: 'Catégorie', key: 'category', width: 20 },
-        { header: 'Prix', key: 'base_price', width: 12 },
-        { header: 'Remise', key: 'discount', width: 10 },
-        { header: 'Stock Total', key: 'stock', width: 12 },
-        { header: 'Vedette', key: 'is_featured', width: 10 }
-      ];
-
-      (products || []).forEach(p => {
-        const totalStock = (p.colors || []).reduce((s, c) => s + (c.stock || 0), 0);
-        sheet.addRow({
-          id: p.id,
-          name: p.name,
-          category: p.category,
-          base_price: parseFloat(p.base_price),
-          discount: parseFloat(p.discount),
-          stock: totalStock,
-          is_featured: p.is_featured ? 'Oui' : 'Non'
-        });
-      });
-    } else {
-      return res.status(400).json({ error: 'Type invalide (orders|products)' });
-    }
-
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    );
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename=${type}-${Date.now()}.xlsx`
-    );
-
-    await workbook.xlsx.write(res);
-    res.end();
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // =====================================================
-// ==================== HEALTH CHECK ==================
+// ==================== SERVER START ===================
 // =====================================================
-app.get('/api/health', async (req, res) => {
-  try {
-    // Test de connexion Supabase
-    const { error } = await supabase.from('settings').select('id').limit(1);
-    res.json({
-      status: error ? 'degraded' : 'ok',
-      database: error ? 'error' : 'connected',
-      timestamp: new Date().toISOString()
-    });
-  } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
 
-// =====================================================
-// ==================== ERROR HANDLING ================
-// =====================================================
-app.use((err, req, res, next) => {
-  console.error('Server Error:', err);
-  res.status(500).json({ error: err.message || 'Erreur serveur' });
-});
-
-// 404
-app.use((req, res) => {
-  res.status(404).json({ error: 'Route non trouvée' });
-});
-
-// =====================================================
-// ==================== START SERVER ==================
-// =====================================================
 app.listen(PORT, () => {
-  console.log(`\n🌟 Born To Shine API - Supabase Edition`);
-  console.log(`📡 Serveur démarré sur le port ${PORT}`);
-  console.log(`🗄️  Supabase URL: ${process.env.SUPABASE_URL || 'NON CONFIGURÉ'}`);
-  console.log(`📦 Storage bucket: ${STORAGE_BUCKET}`);
-  console.log(`🔐 Admin password: ${process.env.ADMIN_DEFAULT_PASSWORD || 'admin123'}\n`);
-});
-
-// Gestion gracieuse de l'arrêt
-process.on('SIGTERM', () => {
-  console.log('SIGTERM reçu. Arrêt du serveur...');
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT reçu. Arrêt du serveur...');
-  process.exit(0);
+  console.log(`🚀 Born To Shine Backend (Supabase Edition) running on port ${PORT}`);
 });

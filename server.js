@@ -911,8 +911,12 @@ app.put('/api/orders/:id', admin, async (req, res) => {
 });
 
 // ---------- EXPORT ORDERS TO EXCEL (إضافة تصدير البيانات) ----------
-app.get('/api/admin/orders/export', admin, async (req, res) => {
+const XLSX = require('xlsx');
+
+// تعديل المسار ليتطابق مع طلب لوحة التحكم تماماً
+app.get('/api/export/excel', admin, async (req, res) => {
   try {
+    // جلب الطلبات من الجدول الجديد
     const { data: orders, error } = await supabase
       .from('orders')
       .select('*')
@@ -920,58 +924,60 @@ app.get('/api/admin/orders/export', admin, async (req, res) => {
 
     if (error) throw error;
 
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Commandes');
+    // إذا كان الجدول فارغاً، نرسل ملفاً يحتوي على ترويسة الأعمدة فقط لتجنب انهيار الموقع
+    if (!orders || orders.length === 0) {
+      const emptyWorksheet = XLSX.utils.json_to_sheet([{
+        'Numéro de Commande': 'Aucune commande disponible',
+        'Date': '',
+        'Nom Client': '',
+        'Téléphone': '',
+        'Total (TND)': '',
+        'Statut': ''
+      }]);
+      const emptyWorkbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(emptyWorkbook, emptyWorksheet, 'Commandes');
+      const buffer = XLSX.write(emptyWorkbook, { type: 'buffer', bookType: 'xlsx' });
+      
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename=Commandes_Vides.xlsx');
+      return res.send(buffer);
+    }
 
-    worksheet.columns = [
-      { header: 'Numéro de Commande', key: 'order_number', width: 20 },
-      { header: 'Client', key: 'customer_name', width: 25 },
-      { header: 'Téléphone', key: 'customer_phone', width: 15 },
-      { header: 'Email', key: 'customer_email', width: 25 },
-      { header: 'Ville', key: 'city', width: 15 },
-      { header: 'Adresse', key: 'address', width: 30 },
-      { header: 'Sous-total (DT)', key: 'subtotal', width: 15 },
-      { header: 'Livraison (DT)', key: 'delivery_fee', width: 15 },
-      { header: 'Remise Coupon (DT)', key: 'coupon_discount', width: 15 },
-      { header: 'Total (DT)', key: 'total', width: 15 },
-      { header: 'Statut', key: 'status', width: 15 },
-      { header: 'Date de Création', key: 'created_at', width: 25 }
-    ];
-
-    (orders || []).forEach(order => {
-      worksheet.addRow({
-        order_number: order.order_number,
-        customer_name: order.customer_name,
-        customer_phone: order.customer_phone,
-        customer_email: order.customer_email || 'N/A',
-        city: order.city || 'N/A',
-        address: order.address || 'N/A',
-        subtotal: parseFloat(order.subtotal) || 0,
-        delivery_fee: parseFloat(order.delivery_fee) || 0,
-        coupon_discount: parseFloat(order.coupon_discount) || 0,
-        total: parseFloat(order.total) || 0,
-        status: order.status,
-        created_at: new Date(order.created_at).toLocaleString()
-      });
+    // ترتيب البيانات داخل ملف الـ Excel وفقاً للحقول الجديدة
+    const excelRows = orders.map(order => {
+      return {
+        'Numéro de Commande': order.order_number, // كود التوليد التلقائي الجديد
+        'Date': order.created_at ? new Date(order.created_at).toLocaleDateString('fr-FR') : '',
+        'Nom Client': order.customer_name,
+        'Téléphone': order.customer_phone,
+        'Email': order.customer_email || '',
+        'Gouvernorat': order.city || '',
+        'Adresse': order.address || '',
+        'Sous-total (TND)': order.subtotal || 0,
+        'Livraison (TND)': order.delivery_fee || 0,
+        'Remise (TND)': order.coupon_discount || 0,
+        'Total Global (TND)': order.total || 0,
+        'Statut': order.status || 'Nouveau',
+        'Notes': order.notes || ''
+      };
     });
 
-    // تنسيق الخلايا العلوية (Header Style)
-    worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFF' } };
-    worksheet.getRow(1).eachCell(cell => {
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1F4E78' } };
-    });
+    const worksheet = XLSX.utils.json_to_sheet(excelRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Commandes AURA');
+
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename=commandes_' + Date.now() + '.xlsx');
+    res.setHeader('Content-Disposition', `attachment; filename=Commandes_AURA_${new Date().toISOString().split('T')[0]}.xlsx`);
+    
+    res.send(buffer);
 
-    await workbook.xlsx.write(res);
-    res.end();
   } catch (err) {
-    console.error(err);
+    console.error('Erreur Excel:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
-
 // ---------- CATEGORIES (admin CRUD) ----------
 app.post('/api/categories', admin, async (req, res) => {
   try {

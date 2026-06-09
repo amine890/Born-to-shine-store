@@ -11,7 +11,7 @@ const fs = require('fs');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const ExcelJS = require('exceljs'); // تم الاحتفاظ بالتعريف هنا فقط
+const ExcelJS = require('exceljs');
 const { createClient } = require('@supabase/supabase-js');
 
 require('dotenv').config();
@@ -21,7 +21,7 @@ const PORT = process.env.PORT || 3050;
 const JWT_SECRET = process.env.JWT_SECRET || 'default-secret-change-me';
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
 
-// Créer le dossier uploads s'il n'existe pas (fallback local si Supabase Storage échoue)
+// Créer le dossier uploads s'il n'existe pas
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
@@ -602,6 +602,39 @@ app.get('/api/analytics', admin, async (req, res) => {
   }
 });
 
+// ---------- SETTINGS (admin Update) ----------
+app.put('/api/settings', admin, async (req, res) => {
+  try {
+    const { deliveryFee, lowStockThreshold, whatsapp, email, instagram, facebook, companyAddress, password } = req.body;
+    
+    const updateData = {
+      delivery_fee: parseFloat(deliveryFee) || 15,
+      low_stock_threshold: parseInt(lowStockThreshold) || 5,
+      whatsapp: whatsapp || null,
+      email: email || null,
+      instagram: instagram || null,
+      facebook: facebook || null,
+      company_address: companyAddress || null
+    };
+
+    if (password && password.trim() !== '') {
+      updateData.admin_password_hash = await bcrypt.hash(password, 10);
+    }
+
+    const { data, error } = await supabase
+      .from('settings')
+      .update(updateData)
+      .eq('id', 1)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, message: 'Paramètres enregistrés avec succès' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------- PRODUCTS (admin CRUD) ----------
 app.post('/api/products', admin, upload.array('images', 25), async (req, res) => {
   try {
@@ -918,6 +951,61 @@ app.get('/api/export/excel', admin, async (req, res) => {
   }
 });
 
+// ---------- EXPORT PRODUCTS TO EXCEL ----------
+app.get('/api/export/products', admin, async (req, res) => {
+  try {
+    const { data: products, error } = await supabase
+      .from('products')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Produits AURA');
+
+    worksheet.columns = [
+      { header: 'ID', key: 'id', width: 10 },
+      { header: 'Nom du Produit', key: 'name', width: 25 },
+      { header: 'Catégorie', key: 'category', width: 15 },
+      { header: 'Prix Base (TND)', key: 'base_price', width: 15 },
+      { header: 'Remise (%)', key: 'discount', width: 12 },
+      { header: 'Vedette', key: 'is_featured', width: 12 },
+      { header: 'Options Tailles', key: 'sizes', width: 20 },
+      { header: 'SEO Title', key: 'seo_title', width: 25 }
+    ];
+
+    if (!products || products.length === 0) {
+      worksheet.addRow({ name: 'Aucun produit disponible' });
+    } else {
+      products.forEach(p => {
+        worksheet.addRow({
+          id: p.id,
+          name: p.name,
+          category: p.category,
+          base_price: p.base_price || 0,
+          discount: p.discount || 0,
+          is_featured: p.is_featured ? 'Oui' : 'Non',
+          sizes: Array.isArray(p.sizes) ? p.sizes.join(', ') : '',
+          seo_title: p.seo_title || ''
+        });
+      });
+    }
+
+    worksheet.getRow(1).font = { bold: true };
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=Produits_AURA_${new Date().toISOString().split('T')[0]}.xlsx`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (err) {
+    console.error('Erreur ExcelJS Products:', err.message);
+    res.status(500).json({ error: 'Erreur lors de la génération du fichier Excel des produits' });
+  }
+});
+
 // ---------- CATEGORIES (admin CRUD) ----------
 app.post('/api/categories', admin, async (req, res) => {
   try {
@@ -992,7 +1080,47 @@ app.get('/api/coupons', admin, async (req, res) => {
   }
 });
 
-// تشغيل السيرفر بالمنفذ الصحيح
+app.post('/api/coupons', admin, async (req, res) => {
+  try {
+    const { code, discount, discountType, expirationDate } = req.body;
+    if (!code || !discount) return res.status(400).json({ error: 'Données manquantes' });
+
+    const { data, error } = await supabase
+      .from('coupons')
+      .insert({
+        code: code.toUpperCase(),
+        discount: parseFloat(discount),
+        discount_type: discountType || 'percentage',
+        expiration_date: expirationDate || null,
+        is_active: true
+      })
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') return res.status(400).json({ error: 'Code coupon déjà existant' });
+      throw error;
+    }
+    res.json(formatCoupon(data));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/coupons/:id', admin, async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('coupons')
+      .delete()
+      .eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// تشغيل السيرفر بالمنفذ الصحيح مباشرة
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
